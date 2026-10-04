@@ -12,9 +12,9 @@ import com.fruitfly.brain.SensoryEncoders;
 import com.fruitfly.brain.SensoryFrame;
 import com.fruitfly.net.BrainTelemetryPayload;
 import net.fabricmc.fabric.api.networking.v1.PlayerLookup;
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.core.HolderLookup;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -29,9 +29,9 @@ import net.minecraft.world.DifficultyInstance;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.SpawnGroupData;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -40,6 +40,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ServerLevelAccessor;
 import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
@@ -155,29 +158,23 @@ public class FlyEntity extends Mob {
         }
     }
 
-    /** Per-world fly-number counter, persisted with the overworld's saved data ({@code data/fruitfly_ids.dat}). */
+    /** Per-world fly-number counter, persisted with the server's saved data ({@code data/fruitfly/fly_ids.dat}). */
     public static final class FlyIds extends SavedData {
-        private static final String NAME = "fruitfly_ids";
-        // The DataFixTypes must not be null: DimensionDataStorage.readTagFromDisk dereferences it unconditionally and
+        private static final Codec<FlyIds> CODEC = RecordCodecBuilder.create(i -> i.group(
+                Codec.INT.optionalFieldOf("Next", 1).forGetter(ids -> ids.next)
+        ).apply(i, FlyIds::new));
+        // The DataFixTypes must not be null: SavedDataStorage.readTagFromDisk dereferences it unconditionally and
         // readSavedData swallows the exception, which would hand back a fresh (reset) counter on every world open.
-        private static final SavedData.Factory<FlyIds> FACTORY =
-                new SavedData.Factory<>(FlyIds::new, FlyIds::load, DataFixTypes.SAVED_DATA_COMMAND_STORAGE);
-        private int next = 1;
+        private static final SavedDataType<FlyIds> TYPE =
+                new SavedDataType<>(FruitFlyMod.id("fly_ids"), FlyIds::new, CODEC, DataFixTypes.SAVED_DATA_COMMAND_STORAGE);
+        private int next;
+
+        public FlyIds() { this(1); }
+
+        private FlyIds(int next) { this.next = Math.max(1, next); }
 
         public static FlyIds get(MinecraftServer server) {
-            return server.overworld().getDataStorage().computeIfAbsent(FACTORY, NAME);
-        }
-
-        private static FlyIds load(CompoundTag tag, HolderLookup.Provider registries) {
-            FlyIds ids = new FlyIds();
-            ids.next = Math.max(1, tag.getInt("Next"));
-            return ids;
-        }
-
-        @Override
-        public CompoundTag save(CompoundTag tag, HolderLookup.Provider registries) {
-            tag.putInt("Next", next);
-            return tag;
+            return server.getDataStorage().computeIfAbsent(TYPE);
         }
 
         /** Hand out the next number. */
@@ -267,7 +264,7 @@ public class FlyEntity extends Mob {
             bodyState.escapeTicks = 0;
             bodyState.smoothedForward = 0;
             bodyState.smoothedYaw = 0;
-            if (!level().isClientSide) {
+            if (!level().isClientSide()) {
                 entityData.set(DATA_HAS_BRAIN, false);
                 entityData.set(DATA_ACTIVITY, 0f);
             }
@@ -298,20 +295,20 @@ public class FlyEntity extends Mob {
     public void tick() {
         // before the AI step so the first telemetry payload already carries the number; runs for NoAI flies too,
         // which never reach customServerAiStep
-        if (!level().isClientSide) ensureIdentity();
+        if (!level().isClientSide()) ensureIdentity();
         super.tick();
     }
 
     /** Spawn egg, /summon and natural spawns: number the fly before its add packet goes out, so clients never see "Fly-?". */
     @Override
-    public SpawnGroupData finalizeSpawn(ServerLevelAccessor level, DifficultyInstance difficulty, MobSpawnType spawnType, SpawnGroupData groupData) {
-        SpawnGroupData result = super.finalizeSpawn(level, difficulty, spawnType, groupData);
+    public SpawnGroupData finalizeSpawn(ServerLevelAccessor level, DifficultyInstance difficulty, EntitySpawnReason spawnReason, SpawnGroupData groupData) {
+        SpawnGroupData result = super.finalizeSpawn(level, difficulty, spawnReason, groupData);
         if (level instanceof ServerLevel) ensureIdentity(); // not from world generation (WorldGenRegion on a worker thread)
         return result;
     }
 
     @Override
-    protected void customServerAiStep() {
+    protected void customServerAiStep(ServerLevel level) {
         if (brain == null) {
             if (--brainRetryTicks <= 0) {
                 brainRetryTicks = 20;
@@ -421,14 +418,14 @@ public class FlyEntity extends Mob {
     public boolean isPushable() { return false; }
 
     @Override
-    public boolean causeFallDamage(float distance, float multiplier, DamageSource source) { return false; }
+    public boolean causeFallDamage(double fallDistance, float multiplier, DamageSource source) { return false; }
 
     @Override
     public boolean isFlapping() { return bodyState.flying || isFlyingState(); }
 
     @Override
-    public boolean hurt(DamageSource source, float amount) {
-        boolean r = super.hurt(source, amount);
+    public boolean hurtServer(ServerLevel level, DamageSource source, float amount) {
+        boolean r = super.hurtServer(level, source, amount);
         if (r) damageAccum = Math.min(1f, damageAccum + amount / 2f);
         return r;
     }
@@ -459,7 +456,7 @@ public class FlyEntity extends Mob {
     protected InteractionResult mobInteract(Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
         TasteTable.Taste t = TasteTable.forItem(stack);
-        if (t != null && !level().isClientSide) {
+        if (t != null && !level().isClientSide()) {
             // offer food by hand: labellar contact for 2 s
             for (Map.Entry<String, Float> e : t.labellar().entrySet()) stimulate(e.getKey(), 120 * e.getValue(), 40);
             for (Map.Entry<String, Float> e : t.tarsal().entrySet()) stimulate(e.getKey(), 100 * e.getValue(), 40);
@@ -470,28 +467,28 @@ public class FlyEntity extends Mob {
     }
 
     @Override
-    public void addAdditionalSaveData(CompoundTag tag) {
-        super.addAdditionalSaveData(tag);
-        tag.putBoolean("Male", isMale());
-        tag.putFloat("FlyScale", getFlyScale());
-        tag.putFloat("Hunger", hunger);
-        tag.putInt("FlyNo", getFlyNumber());
+    protected void addAdditionalSaveData(ValueOutput out) {
+        super.addAdditionalSaveData(out);
+        out.putBoolean("Male", isMale());
+        out.putFloat("FlyScale", getFlyScale());
+        out.putFloat("Hunger", hunger);
+        out.putInt("FlyNo", getFlyNumber());
     }
 
     @Override
-    public void readAdditionalSaveData(CompoundTag tag) {
-        super.readAdditionalSaveData(tag);
-        if (tag.contains("Male")) setMale(tag.getBoolean("Male"));
-        if (tag.contains("FlyScale")) setFlyScale(tag.getFloat("FlyScale"));
-        if (tag.contains("Hunger")) hunger = tag.getFloat("Hunger");
+    protected void readAdditionalSaveData(ValueInput in) {
+        super.readAdditionalSaveData(in);
+        setMale(in.getBooleanOr("Male", isMale()));
+        setFlyScale(in.getFloatOr("FlyScale", getFlyScale()));
+        hunger = in.getFloatOr("Hunger", hunger);
         // the world counter learns about this number on the first server tick (ensureIdentity), not here: chunk
         // entities are deserialised off the server thread
-        if (tag.contains("FlyNo")) entityData.set(DATA_FLY_NO, tag.getInt("FlyNo"));
+        in.getInt("FlyNo").ifPresent(no -> entityData.set(DATA_FLY_NO, no));
     }
 
     @Override
     public void remove(RemovalReason reason) {
         super.remove(reason);
-        if (!level().isClientSide) releaseBrain();
+        if (!level().isClientSide()) releaseBrain();
     }
 }

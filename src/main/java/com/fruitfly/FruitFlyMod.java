@@ -6,15 +6,17 @@ import com.fruitfly.server.BrainCommands;
 import com.fruitfly.server.FruitFlyCommands;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.CreativeModeTabs;
@@ -33,29 +35,31 @@ public final class FruitFlyMod implements ModInitializer {
     public static final FruitFlyConfig CONFIG = FruitFlyConfig.load(CONFIG_PATH);
     public static final FlyBrainService BRAIN = new FlyBrainService(CONFIG);
 
-    public static ResourceLocation id(String path) { return ResourceLocation.fromNamespaceAndPath(MOD_ID, path); }
+    public static Identifier id(String path) { return Identifier.fromNamespaceAndPath(MOD_ID, path); }
 
+    private static final ResourceKey<EntityType<?>> FRUIT_FLY_KEY = ResourceKey.create(Registries.ENTITY_TYPE, id("fruit_fly"));
     public static final EntityType<FlyEntity> FRUIT_FLY = Registry.register(
-            BuiltInRegistries.ENTITY_TYPE, id("fruit_fly"),
+            BuiltInRegistries.ENTITY_TYPE, FRUIT_FLY_KEY,
             EntityType.Builder.of(FlyEntity::new, MobCategory.CREATURE)
                     .sized(0.5f, 0.3f)
                     .eyeHeight(0.2f)
                     .clientTrackingRange(10)
                     .updateInterval(1)
-                    .build());
+                    .build(FRUIT_FLY_KEY));
 
+    private static final ResourceKey<Item> FRUIT_FLY_SPAWN_EGG_KEY = ResourceKey.create(Registries.ITEM, id("fruit_fly_spawn_egg"));
     public static final Item FRUIT_FLY_SPAWN_EGG = Registry.register(
-            BuiltInRegistries.ITEM, id("fruit_fly_spawn_egg"),
-            new SpawnEggItem(FRUIT_FLY, 0xC8A165, 0xB22222, new Item.Properties()));
+            BuiltInRegistries.ITEM, FRUIT_FLY_SPAWN_EGG_KEY,
+            new SpawnEggItem(new Item.Properties().spawnEgg(FRUIT_FLY).setId(FRUIT_FLY_SPAWN_EGG_KEY)));
 
     @Override
     public void onInitialize() {
         LOGGER.info("Fruit Fly Connectome initialising (config {})", CONFIG_PATH);
         FabricDefaultAttributeRegistry.register(FRUIT_FLY, FlyEntity.createAttributes());
         if (CONFIG.spawnEggInCreativeTab) {
-            ItemGroupEvents.modifyEntriesEvent(CreativeModeTabs.SPAWN_EGGS).register(entries -> entries.accept(FRUIT_FLY_SPAWN_EGG));
+            CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.SPAWN_EGGS).register(output -> output.accept(FRUIT_FLY_SPAWN_EGG));
         }
-        PayloadTypeRegistry.playS2C().register(BrainTelemetryPayload.TYPE, BrainTelemetryPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(BrainTelemetryPayload.TYPE, BrainTelemetryPayload.CODEC);
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             FruitFlyCommands.register(dispatcher);
             BrainCommands.register(dispatcher);

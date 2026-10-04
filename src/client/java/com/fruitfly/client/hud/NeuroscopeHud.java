@@ -7,13 +7,14 @@ import com.fruitfly.brain.RetinaGeometry;
 import com.fruitfly.client.BrainWorldOverlay;
 import com.fruitfly.entity.FlyEntity;
 import com.fruitfly.net.BrainTelemetryPayload;
-import com.mojang.blaze3d.vertex.PoseStack;
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.util.Mth;
+import org.joml.Matrix3x2fStack;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,7 +25,7 @@ import java.util.Locale;
  *
  * <p>Layout (top to bottom): title, status line, motor channel bars, watched-population rate bars, spike raster
  * (spikes per brain tick over the last {@value #RASTER_TICKS} payloads), retina inset (two eyes), legend.
- * Everything is drawn in "panel units" (font pixels) under a uniform {@link PoseStack} scale chosen so that text
+ * Everything is drawn in "panel units" (font pixels) under a uniform pose-matrix scale chosen so that text
  * stays an integer number of screen pixels tall and the panel never exceeds 40 % of the screen width.</p>
  *
  * <p>Wiring: {@code FruitFlyClient} calls {@link #register()} once and {@link #toggle()} from its key binding;
@@ -67,7 +68,8 @@ public final class NeuroscopeHud {
     public static void register() {
         if (registered) return;
         registered = true;
-        HudRenderCallback.EVENT.register(NeuroscopeHud::render);
+        // after the last vanilla element: drawn on top, and hidden with the rest of the HUD by F1
+        HudElementRegistry.attachElementAfter(VanillaHudElements.SUBTITLES, FruitFlyMod.id("neuroscope"), NeuroscopeHud::render);
         BrainWorldOverlay.register();
     }
 
@@ -87,11 +89,11 @@ public final class NeuroscopeHud {
 
     // ------------------------------------------------------------------ rendering
 
-    private static void render(GuiGraphics g, DeltaTracker delta) {
+    private static void render(GuiGraphicsExtractor g, DeltaTracker delta) {
         if (!visible) return;
         Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null || mc.player == null || mc.options.hideGui) return;
-        if (mc.gui != null && mc.gui.getDebugOverlay().showDebugScreen()) return;
+        if (mc.level == null || mc.player == null) return;
+        if (mc.getDebugOverlay().showDebugScreen()) return;
         Font font = mc.font;
 
         FlyEntity fly = FlyFocus.current();
@@ -110,27 +112,27 @@ public final class NeuroscopeHud {
         if (fly == null || p == null) {
             int h = PAD + LINE + 1 + LINE + 1 + LINE + PAD;
             s = Math.min(s, Math.min(0.4f * guiW / PANEL_W, 0.97f * guiH / h));
-            PoseStack pose = g.pose();
-            pose.pushPose();
-            pose.translate(guiW - PANEL_W * s - 4, 4, 0);
-            pose.scale(s, s, 1f);
+            Matrix3x2fStack pose = g.pose();
+            pose.pushMatrix();
+            pose.translate(guiW - PANEL_W * s - 4, 4);
+            pose.scale(s, s);
             g.fill(0, 0, PANEL_W, h, HudStyle.BG);
-            g.renderOutline(0, 0, PANEL_W, h, HudStyle.BORDER);
+            g.outline(0, 0, PANEL_W, h, HudStyle.BORDER);
             int y = PAD;
-            g.drawString(font, "NEUROSCOPE", PAD, y, HudStyle.ACCENT, false);
-            g.drawString(font, datasetName(), PAD + font.width("NEUROSCOPE  "), y, HudStyle.TEXT, false);
+            g.text(font, "NEUROSCOPE", PAD, y, HudStyle.ACCENT, false);
+            g.text(font, datasetName(), PAD + font.width("NEUROSCOPE  "), y, HudStyle.TEXT, false);
             y += LINE + 1;
             if (FlyFocus.isLocked()) {
                 // a lock hides every other fly; say so and how to get out of it
-                g.drawString(font, fly == null ? FlyFocus.describe(null) : FlyFocus.describe(fly) + " on " + fly.flyName() + ": no telemetry", PAD, y, HudStyle.YELLOW, false);
+                g.text(font, fly == null ? FlyFocus.describe(null) : FlyFocus.describe(fly) + " on " + fly.flyName() + ": no telemetry", PAD, y, HudStyle.YELLOW, false);
                 y += LINE + 1;
-                g.drawString(font, "/brainview nearest to release the lock", PAD, y, HudStyle.DIM, false);
+                g.text(font, "/brainview nearest to release the lock", PAD, y, HudStyle.DIM, false);
             } else {
-                g.drawString(font, "no fly with telemetry within " + (int) SELECT_RANGE + " blocks", PAD, y, HudStyle.DIM, false);
+                g.text(font, "no fly with telemetry within " + (int) SELECT_RANGE + " blocks", PAD, y, HudStyle.DIM, false);
                 y += LINE + 1;
-                g.drawString(font, "/fruitfly spawn  ·  /fruitfly stats", PAD, y, HudStyle.DIM, false);
+                g.text(font, "/fruitfly spawn  ·  /fruitfly stats", PAD, y, HudStyle.DIM, false);
             }
-            pose.popPose();
+            pose.popMatrix();
             return;
         }
 
@@ -148,62 +150,62 @@ public final class NeuroscopeHud {
                 + PAD;
         s = Math.min(s, Math.min(0.4f * guiW / PANEL_W, 0.97f * guiH / height));
 
-        PoseStack pose = g.pose();
-        pose.pushPose();
-        pose.translate(guiW - PANEL_W * s - 4, 4, 0);
-        pose.scale(s, s, 1f);
+        Matrix3x2fStack pose = g.pose();
+        pose.pushMatrix();
+        pose.translate(guiW - PANEL_W * s - 4, 4);
+        pose.scale(s, s);
 
         g.fill(0, 0, PANEL_W, height, HudStyle.BG);
-        g.renderOutline(0, 0, PANEL_W, height, HudStyle.BORDER);
+        g.outline(0, 0, PANEL_W, height, HudStyle.BORDER);
         int x = PAD, y = PAD;
 
         // ---- title
         String sex = fly.isMale() ? "male" : "female";
         int tx = x;
-        g.drawString(font, "NEUROSCOPE", tx, y, HudStyle.ACCENT, false);
+        g.text(font, "NEUROSCOPE", tx, y, HudStyle.ACCENT, false);
         tx += font.width("NEUROSCOPE") + 8;
-        g.drawString(font, datasetName(), tx, y, HudStyle.TEXT, false);
+        g.text(font, datasetName(), tx, y, HudStyle.TEXT, false);
         tx += font.width(datasetName()) + 8;
         int idCol = 0xFF000000 | fly.getFlyColor();
         g.fill(tx, y + 1, tx + 6, y + 7, idCol);
         tx += 8;
         String flyName = fly.flyName();
-        g.drawString(font, flyName, tx, y, idCol, false);
+        g.text(font, flyName, tx, y, idCol, false);
         tx += font.width(flyName) + 6;
         String focus = FlyFocus.isLocked() ? "LOCKED" : "nearest";
-        g.drawString(font, focus, tx, y, FlyFocus.isLocked() ? HudStyle.YELLOW : HudStyle.DIM, false);
+        g.text(font, focus, tx, y, FlyFocus.isLocked() ? HudStyle.YELLOW : HudStyle.DIM, false);
         tx += font.width(focus) + 6;
-        g.drawString(font, sex, tx, y, fly.isMale() ? HudStyle.CYAN : HudStyle.PINK, false);
+        g.text(font, sex, tx, y, fly.isMale() ? HudStyle.CYAN : HudStyle.PINK, false);
         String age = entry == null ? "" : String.format(Locale.ROOT, "%.0f ms", entry.ageMillis());
-        g.drawString(font, age, PANEL_W - PAD - font.width(age), y, HudStyle.DIM, false);
+        g.text(font, age, PANEL_W - PAD - font.width(age), y, HudStyle.DIM, false);
         y += LINE + 1;
 
         // ---- status
         MotorDecoder.Mode mode = HudStyle.mode(p.mode());
         tx = x;
-        g.drawString(font, mode.name(), tx, y, HudStyle.modeColor(mode), false);
+        g.text(font, mode.name(), tx, y, HudStyle.modeColor(mode), false);
         tx += font.width(mode.name()) + 4;
         if (p.reflex()) {
-            g.drawString(font, "[REFLEX]", tx, y, HudStyle.ORANGE, false);
+            g.text(font, "[REFLEX]", tx, y, HudStyle.ORANGE, false);
             tx += font.width("[REFLEX]") + 4;
         }
         if (!fly.hasBrain()) {
-            g.drawString(font, "[NO BRAIN]", tx, y, HudStyle.RED, false);
+            g.text(font, "[NO BRAIN]", tx, y, HudStyle.RED, false);
             tx += font.width("[NO BRAIN]") + 4;
         }
         String spk = HudStyle.fmtCount(p.spikesThisTick()) + " spk/tick";
-        g.drawString(font, spk, tx, y, HudStyle.TEXT, false);
+        g.text(font, spk, tx, y, HudStyle.TEXT, false);
         tx += font.width(spk) + 6;
         String act = HudStyle.fmtCount(p.activeNeurons()) + " active";
-        g.drawString(font, act, tx, y, HudStyle.TEXT, false);
+        g.text(font, act, tx, y, HudStyle.TEXT, false);
         String rt = String.format(Locale.ROOT, "RT %.2fx", p.realTimeFactor());
-        g.drawString(font, rt, PANEL_W - PAD - font.width(rt), y, p.realTimeFactor() < 0.9f ? HudStyle.RED : HudStyle.GREEN, false);
+        g.text(font, rt, PANEL_W - PAD - font.width(rt), y, p.realTimeFactor() < 0.9f ? HudStyle.RED : HudStyle.GREEN, false);
         y += LINE + 1;
         g.fill(x, y, x + inner, y + 1, HudStyle.SEPARATOR);
         y += GAP;
 
         // ---- motor channels
-        g.drawString(font, "MOTOR", x, y, HudStyle.DIM, false);
+        g.text(font, "MOTOR", x, y, HudStyle.DIM, false);
         y += LINE;
         int cw = inner / 2;
         for (int i = 0; i < MOTOR_ROWS.length; i++) {
@@ -211,7 +213,7 @@ public final class NeuroscopeHud {
             int cx = x + col * cw, cy = y + row * LINE;
             String key = MOTOR_ROWS[i][0];
             float v = motorValue(p, key);
-            g.drawString(font, MOTOR_ROWS[i][1], cx, cy, HudStyle.TEXT, false);
+            g.text(font, MOTOR_ROWS[i][1], cx, cy, HudStyle.TEXT, false);
             int bx = cx + 34, bw = cw - 34 - 6;
             if (key.equals("yaw")) bipolarBar(g, bx, cy + 1, bw, LINE - 3, v, MOTOR_COLORS[i]);
             else bar(g, bx, cy + 1, bw, LINE - 3, v, MOTOR_COLORS[i]);
@@ -219,7 +221,7 @@ public final class NeuroscopeHud {
         y += motorRows * LINE + GAP;
 
         // ---- populations
-        g.drawString(font, "POPULATIONS  Hz  (bar = 100 Hz)", x, y, HudStyle.DIM, false);
+        g.text(font, "POPULATIONS  Hz  (bar = 100 Hz)", x, y, HudStyle.DIM, false);
         y += LINE;
         int pcw = inner / popCols;
         int labelW = popCols == 2 ? 60 : 120, valW = 26;
@@ -230,9 +232,9 @@ public final class NeuroscopeHud {
             float hz = p.popRates()[i];
             int color = HudStyle.populationColor(spec);
             String label = font.plainSubstrByWidth(HudStyle.populationLabel(spec), labelW - 2);
-            g.drawString(font, label, cx, cy, color, false);
+            g.text(font, label, cx, cy, color, false);
             String val = HudStyle.fmtHz(hz);
-            g.drawString(font, val, cx + labelW + valW - font.width(val), cy, HudStyle.TEXT, false);
+            g.text(font, val, cx + labelW + valW - font.width(val), cy, HudStyle.TEXT, false);
             int bx = cx + labelW + valW + 3, bw = pcw - labelW - valW - 3 - 6;
             bar(g, bx, cy + 1, bw, LINE - 3, hz / 100f, color);
             if (entry != null) { // peak-hold tick over the last ~20 payloads
@@ -247,7 +249,7 @@ public final class NeuroscopeHud {
         int nHist = entry == null ? 0 : entry.spikeHistory(SPIKE_BUF);
         int maxSpk = 1000;
         for (int v : SPIKE_BUF) maxSpk = Math.max(maxSpk, v);
-        g.drawString(font, "SPIKES / TICK   last " + RASTER_TICKS + "   max " + HudStyle.fmtCount(maxSpk), x, y, HudStyle.DIM, false);
+        g.text(font, "SPIKES / TICK   last " + RASTER_TICKS + "   max " + HudStyle.fmtCount(maxSpk), x, y, HudStyle.DIM, false);
         y += LINE;
         g.fill(x, y, x + inner, y + RASTER_H + 2, HudStyle.BG_INSET);
         float step = inner / (float) RASTER_TICKS;
@@ -261,7 +263,7 @@ public final class NeuroscopeHud {
             int bx = x + Math.round(i * step);
             g.fill(bx, bottom - h, bx + bw, bottom, HudStyle.lerp(f, HudStyle.RASTER_LOW, HudStyle.YELLOW));
         }
-        if (nHist == 0) g.drawString(font, "no history", x + 2, y + 2, HudStyle.DIM, false);
+        if (nHist == 0) g.text(font, "no history", x + 2, y + 2, HudStyle.DIM, false);
         y += RASTER_H + 2 + GAP;
 
         // ---- retina
@@ -270,7 +272,7 @@ public final class NeuroscopeHud {
         int nL = geom == null ? 0 : geom.rays(RetinaGeometry.LEFT).size();
         int nR = geom == null ? 0 : geom.rays(RetinaGeometry.RIGHT).size();
         boolean mapped = geom != null && rays.length > 0 && rays.length == nL + nR;
-        g.drawString(font, "RETINA  " + rays.length + " rays" + (mapped ? "  (az/el)" : rays.length > 0 ? "  (strip)" : ""), x, y, HudStyle.DIM, false);
+        g.text(font, "RETINA  " + rays.length + " rays" + (mapped ? "  (az/el)" : rays.length > 0 ? "  (strip)" : ""), x, y, HudStyle.DIM, false);
         y += LINE;
         int eyeW = (inner - 4) / 2;
         int lx = x, rx = x + eyeW + 4;
@@ -282,21 +284,21 @@ public final class NeuroscopeHud {
         } else if (rays.length > 0) {
             drawStrip(g, rays, lx, y, inner, EYE_H);
         } else {
-            g.drawString(font, "no retina data", lx + 2, y + 2, HudStyle.DIM, false);
+            g.text(font, "no retina data", lx + 2, y + 2, HudStyle.DIM, false);
         }
-        g.drawString(font, "L", lx + 2, y + EYE_H - LINE, HudStyle.DIM, false);
-        g.drawString(font, "R", rx + eyeW - 2 - font.width("R"), y + EYE_H - LINE, HudStyle.DIM, false);
+        g.text(font, "L", lx + 2, y + EYE_H - LINE, HudStyle.DIM, false);
+        g.text(font, "R", rx + eyeW - 2 - font.width("R"), y + EYE_H - LINE, HudStyle.DIM, false);
         y += EYE_H + 2 + GAP;
 
         // ---- legend
-        g.drawString(font, "KEY POPULATIONS", x, y, HudStyle.DIM, false);
+        g.text(font, "KEY POPULATIONS", x, y, HudStyle.DIM, false);
         y += LINE;
         for (String line : legendLines) {
-            g.drawString(font, line, x, y, HudStyle.DIM, false);
+            g.text(font, line, x, y, HudStyle.DIM, false);
             y += LINE;
         }
 
-        pose.popPose();
+        pose.popMatrix();
     }
 
     // ------------------------------------------------------------------ widgets
@@ -310,7 +312,7 @@ public final class NeuroscopeHud {
         };
     }
 
-    static void bar(GuiGraphics g, int x, int y, int w, int h, float v, int color) {
+    static void bar(GuiGraphicsExtractor g, int x, int y, int w, int h, float v, int color) {
         if (w <= 0 || h <= 0) return;
         g.fill(x, y, x + w, y + h, HudStyle.BAR_BG);
         int fw = Math.round(Mth.clamp(v, 0f, 1f) * w);
@@ -318,7 +320,7 @@ public final class NeuroscopeHud {
     }
 
     /** −1..1 bar filling from the centre: negative to the left, positive to the right. */
-    static void bipolarBar(GuiGraphics g, int x, int y, int w, int h, float v, int color) {
+    static void bipolarBar(GuiGraphicsExtractor g, int x, int y, int w, int h, float v, int color) {
         if (w <= 0 || h <= 0) return;
         g.fill(x, y, x + w, y + h, HudStyle.BAR_BG);
         int mid = x + w / 2;
@@ -335,7 +337,7 @@ public final class NeuroscopeHud {
      * One eye: each coarse ray is placed on a gridW x gridH cell grid by its (azimuth, elevation) within the eye's
      * extent (x increases with azimuth, y increases downward with decreasing elevation) and filled with its luminance.
      */
-    private static void drawEye(GuiGraphics g, RetinaGeometry geom, int side, byte[] rays, int offset, int x, int y, int w, int h) {
+    private static void drawEye(GuiGraphicsExtractor g, RetinaGeometry geom, int side, byte[] rays, int offset, int x, int y, int w, int h) {
         List<RetinaGeometry.Ray> list = geom.rays(side);
         int n = list.size();
         if (n == 0) return;
@@ -362,7 +364,7 @@ public final class NeuroscopeHud {
     }
 
     /** Fallback when no retina geometry is available on this client: rays as a two-row strip, left half then right. */
-    private static void drawStrip(GuiGraphics g, byte[] rays, int x, int y, int w, int h) {
+    private static void drawStrip(GuiGraphicsExtractor g, byte[] rays, int x, int y, int w, int h) {
         int rows = 4;
         int cols = Math.max(1, (rays.length + rows - 1) / rows);
         float cellW = (w - 2) / (float) cols, cellH = (h - 2) / (float) rows;

@@ -1,7 +1,7 @@
 package com.fruitfly.client.hud;
 
 import com.fruitfly.brain.MotorDecoder;
-import net.minecraft.util.FastColor;
+import net.minecraft.util.ARGB;
 
 import java.util.Locale;
 
@@ -137,10 +137,10 @@ final class HudStyle {
 
     static int withAlpha(int argb, int alpha) { return (argb & 0x00FFFFFF) | ((alpha & 0xFF) << 24); }
 
-    static int lerp(float t, int a, int b) { return FastColor.ARGB32.lerp(Math.max(0f, Math.min(1f, t)), a, b); }
+    static int lerp(float t, int a, int b) { return ARGB.srgbLerp(Math.max(0f, Math.min(1f, t)), a, b); }
 
     static int grey(int lum) {
         int l = Math.max(0, Math.min(255, lum));
-        return FastColor.ARGB32.color(255, l, l, l);
+        return ARGB.color(255, l, l, l);
     }
 }

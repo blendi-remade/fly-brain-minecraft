@@ -1,7 +1,6 @@
 package com.fruitfly.client.render;
 
-import com.fruitfly.entity.FlyEntity;
-import net.minecraft.client.model.HierarchicalModel;
+import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.model.geom.PartPose;
 import net.minecraft.client.model.geom.builders.CubeDeformation;
@@ -11,8 +10,7 @@ import net.minecraft.client.model.geom.builders.MeshDefinition;
 import net.minecraft.client.model.geom.builders.PartDefinition;
 import net.minecraft.util.Mth;
 
-import java.util.Map;
-import java.util.WeakHashMap;
+import java.util.List;
 
 /**
  * Voxel model of a male/female <i>Drosophila melanogaster</i>, built at "bee scale" (about 20 px from antennae to
@@ -45,14 +43,18 @@ import java.util.WeakHashMap;
  * wing (box along +z) {@code yRot = +pi/2} points the left wing out to +x; once out, positive {@code zRot} beats it down
  * (negative for the right wing).
  *
- * <p>The wings are kept {@code visible = false} so the opaque cutout pass skips them; {@link FlyWingLayer} renders them
- * with {@code RenderType.entityTranslucent}.
+ * <p>Rendering is deferred and re-poses the model from a {@link FlyRenderState} at draw time, so each instance draws a
+ * fixed subset of the parts ({@link Parts}): the renderer's own instance draws the opaque body with the wings hidden,
+ * {@link FlyWingLayer} has wing-only instances (drawn with {@code RenderTypes.entityTranslucent}, one per motion-blur
+ * ghost stroke) and {@link FlyGlowLayer} a head-only one.
  */
-public class FlyModel extends HierarchicalModel<FlyEntity> {
+public class FlyModel extends EntityModel<FlyRenderState> {
     /** Leg order: L1, R1, L2, R2, L3, R3 (1-based "1,4,5" vs "2,3,6" = tripod {L1,R2,L3} vs {R1,L2,R3}). */
     public static final String[] LEG_NAMES = {"left_front_leg", "right_front_leg", "left_middle_leg", "right_middle_leg", "left_hind_leg", "right_hind_leg"};
 
-    private final ModelPart root;
+    /** Which parts an instance draws; the full hierarchy is still posed so the drawn parts sit where they belong. */
+    public enum Parts { BODY, WINGS, HEAD }
+
     public final ModelPart body;
     public final ModelPart thorax;
     public final ModelPart head;
@@ -64,12 +66,8 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
     public final ModelPart leftWing, rightWing;
     public final ModelPart leftHaltere, rightHaltere;
     public final Leg[] legs = new Leg[6];
-
-    /** Per-entity smoothed behaviour blends (the model instance is shared by every fly of the type). */
-    private final Map<FlyEntity, AnimState> states = new WeakHashMap<>();
-    /** 0..1 amount of "wing blur" the wing layer should draw (flight blend of the fly rendered last). */
-    private float wingBlur;
-    private float wingBlurTime;
+    /** Extra wing stroke angle (times {@link FlyRenderState#wingBlur}) for a motion-blur ghost instance; 0 otherwise. */
+    private final float ghostOffset;
 
     /** One leg: femur pivots at the thorax, tibia at the knee, tarsus at the ankle. */
     public static final class Leg {
@@ -94,13 +92,13 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
         }
     }
 
-    private static final class AnimState {
-        float flight, groom, song, lastAge = Float.NaN;
-        byte groomKind, songSide;
+    public FlyModel(ModelPart root) {
+        this(root, Parts.BODY, 0F);
     }
 
-    public FlyModel(ModelPart root) {
-        this.root = root;
+    public FlyModel(ModelPart root, Parts parts, float ghostOffset) {
+        super(root);
+        this.ghostOffset = ghostOffset;
         this.body = root.getChild("body");
         this.thorax = body.getChild("thorax");
         this.head = body.getChild("head");
@@ -126,9 +124,24 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
             float phase = (i == 0 || i == 3 || i == 4) ? 0F : Mth.PI;
             legs[i] = new Leg(body.getChild(LEG_NAMES[i]), side, restYaw[pair] * side, phase, pair);
         }
-        // wings are drawn by FlyWingLayer (translucent); keep them out of the cutout pass
-        leftWing.visible = false;
-        rightWing.visible = false;
+        // visibility is not part of the pose (resetPose leaves it alone), so the mask is applied once here
+        switch (parts) {
+            case BODY -> { // wings are drawn by FlyWingLayer (translucent); keep them out of the cutout pass
+                leftWing.visible = false;
+                rightWing.visible = false;
+            }
+            case WINGS -> showOnly(leftWing, rightWing);
+            case HEAD -> showOnly(head);
+        }
+    }
+
+    /** Hide every part hanging off the body except {@code shown} (and their children); the body's own box is skipped. */
+    private void showOnly(ModelPart... shown) {
+        body.skipDraw = true;
+        List<ModelPart> keep = List.of(shown);
+        ModelPart[] children = {thorax, head, abdomen, leftWing, rightWing, leftHaltere, rightHaltere,
+                legs[0].femur, legs[1].femur, legs[2].femur, legs[3].femur, legs[4].femur, legs[5].femur};
+        for (ModelPart c : children) c.visible = keep.contains(c);
     }
 
     public static LayerDefinition createBodyLayer() {
@@ -205,29 +218,19 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
         return LayerDefinition.create(mesh, 64, 64);
     }
 
-    @Override
-    public ModelPart root() { return root; }
-
-    /** 0..1: how strongly the wing layer should draw motion-blur ghost strokes for the fly rendered last. */
-    public float wingBlur() { return wingBlur; }
-
-    /** Phase (radians) of the wing beat for the fly rendered last, for the ghost strokes. */
-    public float wingBeatTime() { return wingBlurTime; }
-
     // ------------------------------------------------------------------------------------------------------ animation
 
     @Override
-    public void setupAnim(FlyEntity fly, float limbSwing, float limbSwingAmount, float ageInTicks, float netHeadYaw, float headPitch) {
-        root.getAllParts().forEach(ModelPart::resetPose);
-        AnimState st = advance(fly, ageInTicks);
-        float fl = st.flight;                 // 0 walking .. 1 flying
-        float gr = st.groom;                  // 0 .. 1 grooming
-        float so = st.song;                   // 0 .. 1 singing (unilateral wing extension)
-        float fe = Mth.clamp(fly.getProboscis(), 0F, 1F);   // proboscis extension (already smooth, from the body)
-        boolean flapping = fly.isFlapping();
+    public void setupAnim(FlyRenderState state) {
+        super.setupAnim(state);               // reset to the rest pose
+        float ageInTicks = state.ageInTicks;
+        float netHeadYaw = state.yRot, headPitch = state.xRot;
+        float limbSwing = state.walkAnimationPos, limbSwingAmount = state.walkAnimationSpeed;
+        float fl = state.flight;              // 0 walking .. 1 flying
+        float gr = state.groom;               // 0 .. 1 grooming
+        float so = state.song;                // 0 .. 1 singing (unilateral wing extension)
+        float fe = state.proboscis;           // proboscis extension (already smooth, from the body)
         float t = ageInTicks * 2.1F;          // wing beat cadence (2.1 rad/tick, vanilla bee)
-        wingBlur = flapping ? Math.max(fl, 0.5F) : fl;
-        wingBlurTime = t;
 
         // ---- head: flies barely turn their heads
         head.yRot = netHeadYaw * Mth.DEG_TO_RAD * 0.4F;
@@ -279,8 +282,8 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
             rightWing.xRot = fl * -twist;
             leftHaltere.zRot = fl * -Mth.cos(t) * 0.8F;
             rightHaltere.zRot = fl * Mth.cos(t) * 0.8F;
-            float climb = Mth.clamp((float) fly.getDeltaMovement().y * 3F, -0.5F, 0.5F);
-            float yawRate = Mth.wrapDegrees(fly.yBodyRot - fly.yBodyRotO);
+            float climb = Mth.clamp(state.verticalSpeed * 3F, -0.5F, 0.5F);
+            float yawRate = state.bodyYawRate;
             body.xRot += fl * (-0.25F - climb);
             body.zRot += fl * -Mth.clamp(yawRate * 0.03F, -0.5F, 0.5F);
             body.y += fl * (-1.0F + Mth.sin(ageInTicks * 0.35F) * 0.4F);
@@ -291,7 +294,7 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
 
         // ---- courtship song: extend one wing ~65 deg laterally and vibrate it
         if (so > 0.001F) {
-            float side = st.songSide == 2 ? -1F : 1F;              // 1 = left wing, 2 = right wing
+            float side = state.songSide == 2 ? -1F : 1F;           // 1 = left wing, 2 = right wing
             ModelPart w = side > 0 ? leftWing : rightWing;
             float env = 0.5F + 0.5F * Mth.sin(ageInTicks * 0.6F);   // pulse/sine bouts alternate every ~1 s
             w.yRot = Mth.lerp(so, w.yRot, side * 1.1F);
@@ -304,7 +307,7 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
         // ---- grooming: 6 Hz rubs; kind 1 antennal sweep, 2 head rub, 3 leg rubbing, 4 abdomen sweep
         if (gr > 0.001F) {
             float g = Mth.sin(ageInTicks * 1.9F);                  // 1.9 rad/tick = 6 Hz
-            byte kind = st.groomKind;
+            byte kind = state.groomKind;
             Leg l1 = legs[0], r1 = legs[1], l3 = legs[4], r3 = legs[5];
             switch (kind) {
                 case 1 -> { // front legs sweep forward and up over the antennae, head bows, antennae flick
@@ -350,6 +353,12 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
             labellum.xScale = labellum.zScale = Mth.lerp(fe, 1.0F, 1.4F);
             head.xRot += fe * 0.35F;
         }
+
+        // ---- motion-blur ghost stroke (wing-only instances drawn by FlyWingLayer)
+        if (ghostOffset != 0F) {
+            leftWing.zRot += ghostOffset * state.wingBlur;
+            rightWing.zRot -= ghostOffset * state.wingBlur;
+        }
     }
 
     private static void setLeg(Leg leg, float w, float femurYaw, float femurRoll, float tibiaRoll, float tarsusRoll) {
@@ -357,21 +366,5 @@ public class FlyModel extends HierarchicalModel<FlyEntity> {
         leg.femur.zRot = Mth.lerp(w, leg.femur.zRot, femurRoll);
         leg.tibia.zRot = Mth.lerp(w, leg.tibia.zRot, tibiaRoll);
         leg.tarsus.zRot = Mth.lerp(w, leg.tarsus.zRot, tarsusRoll);
-    }
-
-    /** Smooth the synched behaviour booleans into 0..1 blends so wings/legs do not pop between poses. */
-    private AnimState advance(FlyEntity fly, float ageInTicks) {
-        AnimState st = states.computeIfAbsent(fly, k -> new AnimState());
-        float dt = Float.isNaN(st.lastAge) ? 1F : Mth.clamp(ageInTicks - st.lastAge, 0F, 1F);
-        st.lastAge = ageInTicks;
-        boolean flying = fly.isFlyingState() || fly.isFlapping();
-        byte groom = fly.getGroomState();
-        byte wing = fly.getWingExtension();
-        if (groom != 0) st.groomKind = groom;
-        if (wing != 0) st.songSide = wing;
-        st.flight = Mth.approach(st.flight, flying ? 1F : 0F, dt * 0.35F);
-        st.groom = Mth.approach(st.groom, groom != 0 && !flying ? 1F : 0F, dt * 0.2F);
-        st.song = Mth.approach(st.song, wing != 0 && !flying ? 1F : 0F, dt * 0.2F);
-        return st;
     }
 }

@@ -4,7 +4,7 @@
 [![license: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](LICENSE)
 [![data: CC BY 4.0](https://img.shields.io/badge/data-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 
-A Fabric mod for Minecraft 1.21.1 that puts a whole fruit fly nervous system inside a fly mob. The complete male
+A Fabric mod for Minecraft 26.2 that puts a whole fruit fly nervous system inside a fly mob. The complete male
 *Drosophila melanogaster* central nervous system connectome — **176,422 neurons and 6.29 million connections of five or
 more synapses, carrying 90 million of the dataset's 125 million synapses** (neuPrint `male-cns:v1.0`; Berg et al., *Cell*,
 3 September 2026) — is simulated in real time as a leaky integrate-and-fire spiking network following Shiu et al. (*Nature*
@@ -35,14 +35,15 @@ the current mode and whether the brain or the reflex layer is driving.
 
 ## Quick start
 
-**Requirements**: Minecraft **1.21.1**, [Fabric Loader](https://fabricmc.net/use/) **>= 0.17.3**,
-[Fabric API](https://modrinth.com/mod/fabric-api) **0.107.0+1.21.1** (or any 1.21.1 build), Java **21** or newer.
+**Requirements**: Minecraft **26.2**, [Fabric Loader](https://fabricmc.net/use/) **>= 0.19.5**,
+[Fabric API](https://modrinth.com/mod/fabric-api) **0.161.0+26.2** (or any 26.2 build), Java **25** or newer.
 Give the game a few hundred megabytes of extra heap; 4 GB total is comfortable. The brain uses up to 8 CPU threads per
 fly, so a machine with 8+ cores keeps one fly in real time; more flies share the cores (`maxBrains`, default 4).
 
 **Install**: drop `fruitfly-connectome-<version>.jar` and the Fabric API jar into `.minecraft/mods/`. The 23 MB connectome is
 inside the jar; nothing is downloaded at runtime. Building from source: `./gradlew build` produces
-`build/libs/fruitfly-connectome-0.1.0.jar` (JDK 21+, ~1 minute plus dependency download).
+`build/libs/fruitfly-connectome-0.1.0.jar` (Gradle runs on JDK 25, provisioned automatically if missing; ~1 minute plus
+dependency download).
 
 **Play**:
 
@@ -469,7 +470,7 @@ Code (everything under `src/`, `tools/`, `docs/`): **MIT**, see [LICENSE](LICENS
 ## Repository layout
 
 ```
-build.gradle, gradle.properties        Fabric Loom 1.12, Minecraft 1.21.1, Mojang mappings, Java 21
+build.gradle, gradle.properties        Fabric Loom 1.18, Minecraft 26.2 (unobfuscated), Java 25
 tools/fetch_neuprint.py, build_flyb.py Data pipeline (Python 3.9+, requests/numpy/pandas)
 src/main/java/com/fruitfly/brain       Engine-independent brain: Connectome, LifNetwork, BrainRunner, encoders, decoder
 src/main/java/com/fruitfly/brain/tools BrainBench, VisionBench, EmbodiedBench (headless)

@@ -7,15 +7,18 @@ import com.fruitfly.entity.FlyEntity;
 import com.fruitfly.net.BrainTelemetryPayload;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.PoseStack;
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import com.mojang.blaze3d.textures.FilterMode;
+import com.mojang.blaze3d.textures.GpuSampler;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.renderer.texture.DynamicTexture;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
+import org.joml.Matrix3x2fStack;
 
 import java.util.Arrays;
 import java.util.Locale;
@@ -32,9 +35,9 @@ import java.util.Locale;
  * spike counts for this tick with peak-hold, and a spikes-per-tick history.</p>
  *
  * <p>Layout is done in "panel units" (font pixels): the panel is as wide as its widest text row and the map fills that
- * width, then one uniform {@link PoseStack} scale shrinks the whole panel so it never exceeds 45 % of the screen width
- * or {@link #size()} of the screen height (same approach as {@link NeuroscopeHud}). Fills are batched with
- * {@link GuiGraphics#drawManaged} so the ~100 bars and outlines cost a handful of draw calls per frame.</p>
+ * width, then one uniform pose-matrix scale shrinks the whole panel so it never exceeds 45 % of the screen width
+ * or {@link #size()} of the screen height (same approach as {@link NeuroscopeHud}). The GUI renderer batches fills
+ * itself, so the ~100 bars and outlines cost a handful of draw calls per frame.</p>
  *
  * <p>Selection comes from {@link FlyFocus}; the focused fly's identity colour and name head the panel and match its
  * name tag and the in-world marker, so with several flies it is always clear whose brain this is.</p>
@@ -65,7 +68,7 @@ public final class BrainViewHud {
     private static float[] heat;
     private static NativeImage bgImg, heatImg;
     private static DynamicTexture bgTex, heatTex;
-    private static ResourceLocation bgLoc, heatLoc;
+    private static final Identifier BG_LOC = FruitFlyMod.id("brainview_bg"), HEAT_LOC = FruitFlyMod.id("brainview_heat");
     private static boolean loggedBuild;
 
     // activity state
@@ -82,7 +85,8 @@ public final class BrainViewHud {
     public static void register() {
         if (registered) return;
         registered = true;
-        HudRenderCallback.EVENT.register(BrainViewHud::render);
+        // after the last vanilla element: drawn on top, and hidden with the rest of the HUD by F1
+        HudElementRegistry.attachElementAfter(VanillaHudElements.SUBTITLES, FruitFlyMod.id("brain_view"), BrainViewHud::render);
     }
 
     public static void toggle() { visible = !visible; }
@@ -203,7 +207,7 @@ public final class BrainViewHud {
         Arrays.fill(pr, (byte) -1);
         double logMax = Math.log1p(maxCount);
         for (int p = 0; p < w * h; p++) {
-            if (count[p] == 0) { bg.setPixelRGBA(p % w, p / w, 0); ht.setPixelRGBA(p % w, p / w, 0); continue; }
+            if (count[p] == 0) { bg.setPixelABGR(p % w, p / w, 0); ht.setPixelABGR(p % w, p / w, 0); continue; }
             int best = 0;
             for (int r = 1; r < REGIONS; r++) if (regionHist[p * REGIONS + r] > regionHist[p * REGIONS + best]) best = r;
             pr[p] = (byte) best;
@@ -211,20 +215,18 @@ public final class BrainViewHud {
             float bright = 0.30f + 0.65f * f;
             int rgb = REGION_RGB[best];
             int r = (int) (((rgb >> 16) & 255) * bright), gg = (int) (((rgb >> 8) & 255) * bright), b = (int) ((rgb & 255) * bright);
-            bg.setPixelRGBA(p % w, p / w, abgr(255, r, gg, b));
-            ht.setPixelRGBA(p % w, p / w, 0);
+            bg.setPixelABGR(p % w, p / w, abgr(255, r, gg, b));
+            ht.setPixelABGR(p % w, p / w, 0);
         }
         Minecraft mc = Minecraft.getInstance();
         bgImg = bg;
         heatImg = ht;
-        bgTex = new DynamicTexture(bg);
-        heatTex = new DynamicTexture(ht);
-        bgLoc = mc.getTextureManager().register("fruitfly/brainview_bg", bgTex);
-        heatLoc = mc.getTextureManager().register("fruitfly/brainview_heat", heatTex);
+        bgTex = new DynamicTexture(BG_LOC::toString, bg);       // uploads the image
+        heatTex = new DynamicTexture(HEAT_LOC::toString, ht);
+        mc.getTextureManager().register(BG_LOC, bgTex);
+        mc.getTextureManager().register(HEAT_LOC, heatTex);
         texW = w;
         texH = h;
-        upload(bgTex, bgImg);
-        upload(heatTex, heatImg);
         pixelOf = px;
         regionOf = new byte[n];
         for (int i = 0; i < n; i++) regionOf[i] = (byte) region[i];
@@ -244,20 +246,18 @@ public final class BrainViewHud {
 
     private static void releaseTextures() {
         Minecraft mc = Minecraft.getInstance();
-        if (bgLoc != null) mc.getTextureManager().release(bgLoc);
-        if (heatLoc != null) mc.getTextureManager().release(heatLoc);
-        bgLoc = heatLoc = null;
+        if (bgTex != null) mc.getTextureManager().release(BG_LOC);
+        if (heatTex != null) mc.getTextureManager().release(HEAT_LOC);
         bgTex = heatTex = null;
         bgImg = heatImg = null;
     }
 
     /**
-     * Upload the whole image with linear filtering and clamped edges. {@link DynamicTexture#upload()} would select
-     * GL_NEAREST, which drops single-texel spikes whenever the map is drawn smaller than the texture.
+     * Linear filtering and clamped edges for drawing the map: {@link DynamicTexture}'s own sampler is GL_NEAREST, which
+     * drops single-texel spikes whenever the map is drawn smaller than the texture.
      */
-    private static void upload(DynamicTexture tex, NativeImage img) {
-        tex.bind();
-        img.upload(0, 0, 0, 0, 0, texW, texH, true, true, false, false);
+    private static GpuSampler linearSampler() {
+        return RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);
     }
 
     private static int abgr(int a, int r, int g, int b) {
@@ -291,7 +291,7 @@ public final class BrainViewHud {
         for (int p = 0; p < w * h; p++) {
             float v = heat[p];
             if (v < 0.02f) {
-                if (heatImg.getPixelRGBA(p % w, p / w) != 0) heatImg.setPixelRGBA(p % w, p / w, 0);
+                if (heatImg.getPixel(p % w, p / w) != 0) heatImg.setPixelABGR(p % w, p / w, 0);
                 continue;
             }
             int region = pixelRegion[p] < 0 ? 7 : pixelRegion[p];
@@ -301,9 +301,9 @@ public final class BrainViewHud {
             int r = (int) Mth.lerp(wht, ((rgb >> 16) & 255) * 0.6f + 100, 255);
             int g = (int) Mth.lerp(wht, ((rgb >> 8) & 255) * 0.6f + 100, 250);
             int b = (int) Mth.lerp(wht, (rgb & 255) * 0.6f + 60, 200);
-            heatImg.setPixelRGBA(p % w, p / w, abgr((int) (255 * Math.min(1f, v)), Math.min(255, r), Math.min(255, g), Math.min(255, b)));
+            heatImg.setPixelABGR(p % w, p / w, abgr((int) (255 * Math.min(1f, v)), Math.min(255, r), Math.min(255, g), Math.min(255, b)));
         }
-        upload(heatTex, heatImg);
+        heatTex.upload();
     }
 
     // ------------------------------------------------------------------ layout
@@ -329,11 +329,11 @@ public final class BrainViewHud {
 
     // ------------------------------------------------------------------ render
 
-    private static void render(GuiGraphics g, DeltaTracker delta) {
+    private static void render(GuiGraphicsExtractor g, DeltaTracker delta) {
         if (!visible) return;
         Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null || mc.player == null || mc.options.hideGui) return;
-        if (mc.gui != null && mc.gui.getDebugOverlay().showDebugScreen()) return; // F3 owns the top-left corner
+        if (mc.level == null || mc.player == null) return;
+        if (mc.getDebugOverlay().showDebugScreen()) return; // F3 owns the top-left corner
         Font font = mc.font;
         int guiW = g.guiWidth(), guiH = g.guiHeight();
         final int pad = PAD, line = LINE;
@@ -341,9 +341,9 @@ public final class BrainViewHud {
         if (!FruitFlyMod.BRAIN.ready()) {
             FruitFlyMod.BRAIN.preload();
             g.fill(4, 4, 4 + 190, 4 + 2 * line + 2 * pad, HudStyle.BG);
-            g.renderOutline(4, 4, 190, 2 * line + 2 * pad, HudStyle.BORDER);
-            g.drawString(font, "BRAIN VIEW", 4 + pad, 4 + pad, HudStyle.ACCENT, false);
-            g.drawString(font, FruitFlyMod.BRAIN.loadError() != null ? "connectome failed to load" : "loading connectome...", 4 + pad, 4 + pad + line, HudStyle.DIM, false);
+            g.outline(4, 4, 190, 2 * line + 2 * pad, HudStyle.BORDER);
+            g.text(font, "BRAIN VIEW", 4 + pad, 4 + pad, HudStyle.ACCENT, false);
+            g.text(font, FruitFlyMod.BRAIN.loadError() != null ? "connectome failed to load" : "loading connectome...", 4 + pad, 4 + pad + line, HudStyle.DIM, false);
             return;
         }
         Connectome c = FruitFlyMod.BRAIN.connectome();
@@ -396,24 +396,22 @@ public final class BrainViewHud {
         final int panelH = mapY + imgH + 2 + line + regionsH + 2 + line + RASTER_H + pad;
         float s = Math.min(1f, Math.min(0.45f * guiW / panelW, sizeFrac * guiH / panelH));
 
-        PoseStack pose = g.pose();
-        pose.pushPose();
-        pose.translate(4, 4, 0);
-        pose.scale(s, s, 1f);
+        Matrix3x2fStack pose = g.pose();
+        pose.pushMatrix();
+        pose.translate(4, 4);
+        pose.scale(s, s);
         final int x = pad;
         int y = pad;
 
-        // ---- chrome: panel background, outline, identity swatch, map inset (one batch; flushed before the blits)
+        // ---- chrome: panel background, outline, identity swatch, map inset
         final int idCol = fly == null ? 0 : 0xFF000000 | fly.getFlyColor();
-        g.drawManaged(() -> {
-            g.fill(0, 0, panelW, panelH, HudStyle.BG);
-            g.renderOutline(0, 0, panelW, panelH, HudStyle.BORDER);
-            if (idCol != 0) {
-                g.fill(pad, pad, pad + 7, pad + 7, idCol);
-                g.renderOutline(pad, pad, 7, 7, 0x80FFFFFF);
-            }
-            g.fill(pad, mapY, pad + imgW, mapY + imgH, HudStyle.BG_INSET);
-        });
+        g.fill(0, 0, panelW, panelH, HudStyle.BG);
+        g.outline(0, 0, panelW, panelH, HudStyle.BORDER);
+        if (idCol != 0) {
+            g.fill(pad, pad, pad + 7, pad + 7, idCol);
+            g.outline(pad, pad, 7, 7, 0x80FFFFFF);
+        }
+        g.fill(pad, mapY, pad + imgW, mapY + imgH, HudStyle.BG_INSET);
 
         // ---- title: identity swatch + name + focus mode + distance
         if (fly != null) {
@@ -421,29 +419,29 @@ public final class BrainViewHud {
             String lock = FlyFocus.isLocked() ? "LOCKED" : "nearest";
             String dist = String.format(Locale.ROOT, "%.1f m", fly.distanceTo(mc.player));
             int tx = x + 10;
-            g.drawString(font, name, tx, y, idCol, false);
+            g.text(font, name, tx, y, idCol, false);
             tx += font.width(name) + 6;
-            g.drawString(font, lock, tx, y, FlyFocus.isLocked() ? HudStyle.YELLOW : HudStyle.DIM, false);
+            g.text(font, lock, tx, y, FlyFocus.isLocked() ? HudStyle.YELLOW : HudStyle.DIM, false);
             tx += font.width(lock) + 4;
-            if (tx + font.width(dist) <= x + inner) g.drawString(font, dist, x + inner - font.width(dist), y, HudStyle.DIM, false);
+            if (tx + font.width(dist) <= x + inner) g.text(font, dist, x + inner - font.width(dist), y, HudStyle.DIM, false);
         } else {
-            g.drawString(font, "BRAIN VIEW", x, y, HudStyle.ACCENT, false);
+            g.text(font, "BRAIN VIEW", x, y, HudStyle.ACCENT, false);
             String st = FlyFocus.isLocked() ? "locked fly not loaded" : "no fly with telemetry nearby";
-            g.drawString(font, st, x + inner - font.width(st), y, FlyFocus.isLocked() ? HudStyle.YELLOW : HudStyle.DIM, false);
+            g.text(font, st, x + inner - font.width(st), y, FlyFocus.isLocked() ? HudStyle.YELLOW : HudStyle.DIM, false);
         }
         y += line;
         // ---- status
         if (p != null) {
             MotorDecoder.Mode mode = HudStyle.mode(p.mode());
             int tx = x;
-            g.drawString(font, mode.name(), tx, y, fresh ? HudStyle.modeColor(mode) : HudStyle.DIM, false);
+            g.text(font, mode.name(), tx, y, fresh ? HudStyle.modeColor(mode) : HudStyle.DIM, false);
             tx += font.width(mode.name()) + 5;
             if (p.reflex()) {
-                g.drawString(font, "[REFLEX]", tx, y, fresh ? HudStyle.ORANGE : HudStyle.DIM, false);
+                g.text(font, "[REFLEX]", tx, y, fresh ? HudStyle.ORANGE : HudStyle.DIM, false);
                 tx += font.width("[REFLEX]") + 5;
             }
             String spk = HudStyle.fmtCount(p.spikesThisTick()) + " spk/tick";
-            g.drawString(font, spk, tx, y, fresh ? HudStyle.TEXT : HudStyle.DIM, false);
+            g.text(font, spk, tx, y, fresh ? HudStyle.TEXT : HudStyle.DIM, false);
             tx += font.width(spk) + 6;
             String right;
             int rightCol;
@@ -454,45 +452,43 @@ public final class BrainViewHud {
                 right = String.format(Locale.ROOT, "stale %.0f s", entry.ageMillis() / 1000.0);
                 rightCol = HudStyle.ORANGE;
             }
-            if (tx + font.width(right) <= x + inner) g.drawString(font, right, x + inner - font.width(right), y, rightCol, false);
+            if (tx + font.width(right) <= x + inner) g.text(font, right, x + inner - font.width(right), y, rightCol, false);
         } else if (fly != null) {
-            g.drawString(font, fly.hasBrain() ? "waiting for telemetry" : "no brain (reflex body)", x, y, HudStyle.DIM, false);
+            g.text(font, fly.hasBrain() ? "waiting for telemetry" : "no brain (reflex body)", x, y, HudStyle.DIM, false);
         } else if (FlyFocus.isLocked()) {
-            g.drawString(font, "/brainview nearest to release", x, y, HudStyle.DIM, false);
+            g.text(font, "/brainview nearest to release", x, y, HudStyle.DIM, false);
         } else {
-            g.drawString(font, c.dataset + "  " + HudStyle.fmtCount(c.n) + " neurons", x, y, HudStyle.DIM, false);
+            g.text(font, c.dataset + "  " + HudStyle.fmtCount(c.n) + " neurons", x, y, HudStyle.DIM, false);
         }
         y = mapY;
 
-        // ---- brain map (immediate-mode blits; the inset fill above was flushed by drawManaged)
-        RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
-        g.blit(bgLoc, x, y, imgW, imgH, 0f, 0f, texW, texH, texW, texH);
-        g.blit(heatLoc, x, y, imgW, imgH, 0f, 0f, texW, texH, texW, texH);
+        // ---- brain map: static region map, then the alpha-blended heat on top
+        g.blit(bgTex.getTextureView(), linearSampler(), x, y, x + imgW, y + imgH, 0f, 1f, 0f, 1f);
+        g.blit(heatTex.getTextureView(), linearSampler(), x, y, x + imgW, y + imgH, 0f, 1f, 0f, 1f);
         // orientation labels
         switch (view) {
             case DORSAL -> {
-                g.drawString(font, "L", x + 2, y + 2, HudStyle.DIM, false);
-                g.drawString(font, "R", x + imgW - 2 - font.width("R"), y + 2, HudStyle.DIM, false);
-                g.drawString(font, "brain", x + 2, y + imgH / 2 - 14, HudStyle.DIM, false);
-                g.drawString(font, "VNC", x + 2, y + imgH - line - 1, HudStyle.DIM, false);
+                g.text(font, "L", x + 2, y + 2, HudStyle.DIM, false);
+                g.text(font, "R", x + imgW - 2 - font.width("R"), y + 2, HudStyle.DIM, false);
+                g.text(font, "brain", x + 2, y + imgH / 2 - 14, HudStyle.DIM, false);
+                g.text(font, "VNC", x + 2, y + imgH - line - 1, HudStyle.DIM, false);
             }
             case FRONTAL -> {
-                g.drawString(font, "R", x + 2, y + 2, HudStyle.DIM, false);
-                g.drawString(font, "L", x + imgW - 2 - font.width("L"), y + 2, HudStyle.DIM, false);
-                g.drawString(font, "dorsal", x + 2, y + imgH - line - 1, HudStyle.DIM, false);
+                g.text(font, "R", x + 2, y + 2, HudStyle.DIM, false);
+                g.text(font, "L", x + imgW - 2 - font.width("L"), y + 2, HudStyle.DIM, false);
+                g.text(font, "dorsal", x + 2, y + imgH - line - 1, HudStyle.DIM, false);
             }
             case SIDE -> {
-                g.drawString(font, "front", x + 2, y + 2, HudStyle.DIM, false);
-                g.drawString(font, "back", x + imgW - 2 - font.width("back"), y + 2, HudStyle.DIM, false);
+                g.text(font, "front", x + 2, y + 2, HudStyle.DIM, false);
+                g.text(font, "back", x + imgW - 2 - font.width("back"), y + 2, HudStyle.DIM, false);
             }
         }
         String vw = view.name().toLowerCase(Locale.ROOT);
-        g.drawString(font, vw, x + imgW - 2 - font.width(vw), y + imgH - line - 1, HudStyle.DIM, false);
+        g.text(font, vw, x + imgW - 2 - font.width(vw), y + imgH - line - 1, HudStyle.DIM, false);
         y += imgH + 2;
 
         // ---- regions: label | bar (peak-hold tick) | count
-        g.drawString(font, "SPIKES THIS TICK BY REGION (sampled)", x, y, HudStyle.DIM, false);
+        g.text(font, "SPIKES THIS TICK BY REGION (sampled)", x, y, HudStyle.DIM, false);
         y += line;
         final int labelW = regionLabelWidth(font) + 4;
         final int bx = x + labelW, bw = Math.max(1, inner - labelW - font.width("9999") - 4);
@@ -500,21 +496,19 @@ public final class BrainViewHud {
         for (int r = 0; r < REGIONS; r++) peakAll = Math.max(peakAll, regionPeak[r]);
         final float peak = peakAll;
         final int barsY = y;
-        g.drawManaged(() -> {
-            for (int r = 0; r < REGIONS; r++) {
-                int ry = barsY + r * 8;
-                g.fill(bx, ry, bx + bw, ry + 6, HudStyle.BAR_BG);
-                int fw = Math.round(Mth.clamp(regionCounts[r] / peak, 0f, 1f) * bw);
-                if (fw > 0) g.fill(bx, ry, bx + fw, ry + 6, 0xFF000000 | REGION_RGB[r]);
-                int pk = bx + Math.round(Mth.clamp(regionPeak[r] / peak, 0f, 1f) * (bw - 1));
-                g.fill(pk, ry, pk + 1, ry + 6, 0x80FFFFFF);
-            }
-        });
+        for (int r = 0; r < REGIONS; r++) {
+            int ry = barsY + r * 8;
+            g.fill(bx, ry, bx + bw, ry + 6, HudStyle.BAR_BG);
+            int fw = Math.round(Mth.clamp(regionCounts[r] / peak, 0f, 1f) * bw);
+            if (fw > 0) g.fill(bx, ry, bx + fw, ry + 6, 0xFF000000 | REGION_RGB[r]);
+            int pk = bx + Math.round(Mth.clamp(regionPeak[r] / peak, 0f, 1f) * (bw - 1));
+            g.fill(pk, ry, pk + 1, ry + 6, 0x80FFFFFF);
+        }
         for (int r = 0; r < REGIONS; r++) {
             int ry = y + r * 8;
-            g.drawString(font, REGION_NAMES[r], x, ry - 1, 0xFF000000 | REGION_RGB[r], false);
+            g.text(font, REGION_NAMES[r], x, ry - 1, 0xFF000000 | REGION_RGB[r], false);
             String cnt = Integer.toString(regionCounts[r]);
-            g.drawString(font, cnt, x + inner - font.width(cnt), ry - 1, HudStyle.TEXT, false);
+            g.text(font, cnt, x + inner - font.width(cnt), ry - 1, HudStyle.TEXT, false);
         }
         y += regionsH + 2;
 
@@ -528,24 +522,22 @@ public final class BrainViewHud {
         }
         int maxSpk = 500;
         for (int v : SPIKE_HIST) maxSpk = Math.max(maxSpk, v);
-        g.drawString(font, "spikes/tick  last " + RASTER_TICKS + "  max " + HudStyle.fmtCount(maxSpk), x, y, HudStyle.DIM, false);
+        g.text(font, "spikes/tick  last " + RASTER_TICKS + "  max " + HudStyle.fmtCount(maxSpk), x, y, HudStyle.DIM, false);
         y += line;
         final int rasterY = y, maxV = maxSpk;
-        g.drawManaged(() -> {
-            g.fill(x, rasterY, x + inner, rasterY + RASTER_H, HudStyle.BG_INSET);
-            float step = inner / (float) RASTER_TICKS;
-            int barW = Math.max(1, (int) step - 1);
-            for (int i = 0; i < RASTER_TICKS; i++) {
-                int v = SPIKE_HIST[i];
-                if (v <= 0) continue;
-                float f = v / (float) maxV;
-                int bh = Math.max(1, Math.round(f * (RASTER_H - 2)));
-                int barX = x + Math.round(i * step);
-                g.fill(barX, rasterY + RASTER_H - 1 - bh, barX + barW, rasterY + RASTER_H - 1, HudStyle.lerp(f, HudStyle.RASTER_LOW, HudStyle.YELLOW));
-            }
-        });
-        if (nHist == 0) g.drawString(font, "no history", x + 2, y + 2, HudStyle.DIM, false);
+        g.fill(x, rasterY, x + inner, rasterY + RASTER_H, HudStyle.BG_INSET);
+        float step = inner / (float) RASTER_TICKS;
+        int barW = Math.max(1, (int) step - 1);
+        for (int i = 0; i < RASTER_TICKS; i++) {
+            int v = SPIKE_HIST[i];
+            if (v <= 0) continue;
+            float f = v / (float) maxV;
+            int bh = Math.max(1, Math.round(f * (RASTER_H - 2)));
+            int barX = x + Math.round(i * step);
+            g.fill(barX, rasterY + RASTER_H - 1 - bh, barX + barW, rasterY + RASTER_H - 1, HudStyle.lerp(f, HudStyle.RASTER_LOW, HudStyle.YELLOW));
+        }
+        if (nHist == 0) g.text(font, "no history", x + 2, y + 2, HudStyle.DIM, false);
 
-        pose.popPose();
+        pose.popMatrix();
     }
 }

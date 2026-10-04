@@ -1,44 +1,44 @@
 package com.fruitfly.client.render;
 
-import com.fruitfly.entity.FlyEntity;
+import com.fruitfly.client.FruitFlyClient;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import net.minecraft.client.renderer.LightTexture;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.util.FastColor;
+import net.minecraft.util.ARGB;
+import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 
 /**
  * Subtle "brain glow": re-draws the head (with its eyes, antennae and proboscis) full-bright through
- * {@code RenderType.entityTranslucentEmissive} tinted pink, with an alpha that follows the synched brain-activity
- * summary ({@link FlyEntity#getActivity()}, spikes per tick normalised). Flies without a brain do not glow.
- * The overlay shares the head's exact geometry, so with the LEQUAL depth test it lands on top without z-fighting.
+ * {@code RenderTypes.entityTranslucentEmissive} tinted pink, with an alpha that follows the synched brain-activity
+ * summary ({@link FlyRenderState#activity}, spikes per tick normalised). Flies without a brain do not glow.
+ * The overlay is a head-only {@link FlyModel} posed like the body, so it shares the head's exact geometry and with the
+ * LEQUAL depth test lands on top without z-fighting.
  */
-public final class FlyGlowLayer extends RenderLayer<FlyEntity, FlyModel> {
-    public FlyGlowLayer(RenderLayerParent<FlyEntity, FlyModel> parent) {
+public final class FlyGlowLayer extends RenderLayer<FlyRenderState, FlyModel> {
+    private final FlyModel head;
+
+    public FlyGlowLayer(RenderLayerParent<FlyRenderState, FlyModel> parent, EntityRendererProvider.Context context) {
         super(parent);
+        head = new FlyModel(context.bakeLayer(FruitFlyClient.FLY_LAYER), FlyModel.Parts.HEAD, 0F);
     }
 
     @Override
-    public void render(PoseStack poseStack, MultiBufferSource buffers, int packedLight, FlyEntity fly, float limbSwing,
-                       float limbSwingAmount, float partialTick, float ageInTicks, float netHeadYaw, float headPitch) {
-        if (!fly.hasBrain() || fly.isInvisible()) return;
-        float activity = Mth.clamp(fly.getActivity(), 0F, 1F);
+    public void submit(PoseStack poseStack, SubmitNodeCollector collector, int lightCoords, FlyRenderState state,
+                       float yRot, float xRot) {
+        if (!state.hasBrain || state.isInvisible) return;
+        float activity = Mth.clamp(state.activity, 0F, 1F);
         if (activity < 0.04F) return;
         // gentle 1 Hz shimmer so the glow reads as "alive" even at a steady rate; alpha floor keeps texels above the
         // shaders' 0.1 discard threshold
-        float shimmer = 0.85F + 0.15F * Mth.sin(ageInTicks * 0.31F);
+        float shimmer = 0.85F + 0.15F * Mth.sin(state.ageInTicks * 0.31F);
         int alpha = Mth.clamp((int) ((40F + 110F * activity) * shimmer), 32, 160);
-        int tint = FastColor.ARGB32.color(alpha, 255, 140, 205);
-        FlyModel model = getParentModel();
-        VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucentEmissive(getTextureLocation(fly)));
-        poseStack.pushPose();
-        model.body.translateAndRotate(poseStack);
-        model.head.render(poseStack, vc, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY, tint);
-        poseStack.popPose();
+        int tint = ARGB.color(alpha, 255, 140, 205);
+        collector.submitModel(head, state, poseStack, RenderTypes.entityTranslucentEmissive(FlyRenderer.texture(state)),
+                LightCoordsUtil.FULL_BRIGHT, OverlayTexture.NO_OVERLAY, tint, null, 0, null);
     }
 }

@@ -16,22 +16,19 @@ concurrency:
 
 jobs:
   build:
-    name: Build and test (JDK 21, Fabric 1.21.1)
+    name: Build and test (JDK 25, Fabric 26.2)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
           cache: gradle
-
-      - name: Make the Gradle wrapper executable
-        run: chmod +x gradlew
 
       - name: Build (compiles both source sets, runs the JUnit tests, remaps the jar)
         run: ./gradlew build --no-daemon

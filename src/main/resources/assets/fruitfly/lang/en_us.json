@@ -3,5 +3,5 @@
   "item.fruitfly.fruit_fly_spawn_egg": "Fruit Fly Spawn Egg",
   "key.fruitfly.neuroscope": "Toggle Neuroscope",
   "key.fruitfly.brainview": "Toggle Brain View",
-  "category.fruitfly": "Fruit Fly Connectome"
+  "key.category.fruitfly.main": "Fruit Fly Connectome"
 }

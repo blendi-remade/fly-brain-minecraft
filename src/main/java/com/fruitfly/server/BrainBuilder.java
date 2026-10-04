@@ -77,15 +77,15 @@ public final class BrainBuilder {
 
     static Block blockFor(byte cls) {
         return switch (cls) {
-            case 1 -> Blocks.CYAN_STAINED_GLASS;
-            case 2 -> Blocks.WHITE_STAINED_GLASS;
-            case 3 -> Blocks.LIME_STAINED_GLASS;
-            case 4 -> Blocks.YELLOW_STAINED_GLASS;
-            case 5 -> Blocks.RED_STAINED_GLASS;
-            case 6 -> Blocks.ORANGE_STAINED_GLASS;
-            case 7 -> Blocks.LIGHT_BLUE_STAINED_GLASS;
-            case 8 -> Blocks.MAGENTA_STAINED_GLASS;
-            default -> Blocks.GRAY_STAINED_GLASS;
+            case 1 -> Blocks.STAINED_GLASS.cyan();
+            case 2 -> Blocks.STAINED_GLASS.white();
+            case 3 -> Blocks.STAINED_GLASS.lime();
+            case 4 -> Blocks.STAINED_GLASS.yellow();
+            case 5 -> Blocks.STAINED_GLASS.red();
+            case 6 -> Blocks.STAINED_GLASS.orange();
+            case 7 -> Blocks.STAINED_GLASS.lightBlue();
+            case 8 -> Blocks.STAINED_GLASS.magenta();
+            default -> Blocks.STAINED_GLASS.gray();
         };
     }
 

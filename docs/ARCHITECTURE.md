@@ -67,7 +67,7 @@ motor neuron activity is decoded into the fly mob's movement.
   feed = MN9 (proboscis); groom = aDN1/aDN2; song = pIP10 + wing MNs (b1/i1/hg); flight = DLMn/DVMn power MNs.
   Rates are read over the last tick and low-pass filtered; discrete actions use hysteresis thresholds.
 
-## 3. Body (`com.fruitfly.entity`, Fabric 1.21.1 mojmap)
+## 3. Body (`com.fruitfly.entity`, Fabric 26.2)
 
 * `FlyEntity extends PathfinderMob` with **no vanilla goals**. Each server tick: build `SensoryFrame` from the world
   (retina raycasts on a subset of columns per tick, item/block odor sources within 16 blocks, contact sensing,
@@ -122,7 +122,7 @@ threshold / sparse coding); everything else is literal.
 ## 7. Repository layout
 
 ```
-build.gradle, gradle.properties        Fabric Loom 1.12, MC 1.21.1, mojmap, Java 21
+build.gradle, gradle.properties        Fabric Loom 1.18, MC 26.2, Java 25
 tools/fetch_neuprint.py, build_flyb.py Data pipeline
 src/main/java/com/fruitfly/brain       Engine-independent brain
 src/main/java/com/fruitfly/entity      Fly mob, sensors, motor

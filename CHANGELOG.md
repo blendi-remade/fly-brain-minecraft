@@ -3,6 +3,24 @@
 All notable changes to the Fruit Fly Connectome mod are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Ported to Minecraft 26.2: Fabric Loader 0.19.5, Fabric API 0.161.0+26.2, Loom 1.18 (unobfuscated game, no mappings),
+  Gradle 9.7.1, Java 25. The Gradle daemon JVM is pinned to 25 in `gradle/gradle-daemon-jvm.properties` and downloaded
+  automatically when no JDK 25 is installed.
+- Fly rendering moved to render states: `FlyRenderState` carries everything the model needs, and the wing, motion-blur
+  ghost and glow layers draw their own masked `FlyModel` instances (rendering is deferred, so layers can no longer pose
+  the shared model between draws).
+- Neuroscope and brain view HUDs register through `HudElementRegistry` (after the last vanilla element, hidden with F1);
+  the brain hologram and focus marker are submitted from `LevelRenderEvents.COLLECT_SUBMITS` with an additive pipeline.
+- Entity saving uses `ValueInput`/`ValueOutput` (same keys, old saves load); the fly-number counter is now
+  `data/fruitfly/fly_ids.dat`.
+- Spawn egg has its own item texture (`tools/gen_spawn_egg.py`), since 26.x has no tinted spawn-egg template.
+
+### Fixed
+- `gradlew` is committed with its executable bit, so `./gradlew build` works on a fresh clone.
+
 ## [0.1.0] - 2026-09-03
 
 Initial release, built on the day the male CNS connectome paper (Berg et al., *Cell* 2026) was published.

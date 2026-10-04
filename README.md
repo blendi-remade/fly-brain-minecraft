@@ -4,7 +4,7 @@
 [![code: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](LICENSE)
 [![data: CC BY 4.0](https://img.shields.io/badge/data-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 
-A Fabric mod for Minecraft 1.21.1 that runs the complete male fruit fly nervous system inside a fly mob.
+A Fabric mod for Minecraft 26.2 that runs the complete male fruit fly nervous system inside a fly mob.
 
 The connectome is the male *Drosophila melanogaster* central nervous system released by Janelia, Google Research and
 the Cambridge connectomics group (neuPrint `male-cns:v1.0`, Berg et al., *Cell*, September 2026): 176,422 neurons and
@@ -54,12 +54,12 @@ scaffolding is spelled out in [docs/REFERENCE.md](docs/REFERENCE.md) and [docs/V
 
 ## Quick start
 
-Requirements: Minecraft 1.21.1, Fabric Loader 0.17.3 or newer, Fabric API for 1.21.1, Java 21 or newer. A machine with
+Requirements: Minecraft 26.2, Fabric Loader 0.19.5 or newer, Fabric API for 26.2, Java 25 or newer. A machine with
 8 or more cores keeps one fly in real time; more flies share the cores (`maxBrains`, default 4).
 
 Install: put `fruitfly-connectome-<version>.jar` and the Fabric API jar into `.minecraft/mods/`. The 23 MB connectome is
-inside the jar, nothing is downloaded at runtime. To build from source run `./gradlew build` (JDK 21 or newer); the jar
-lands in `build/libs/`.
+inside the jar, nothing is downloaded at runtime. To build from source run `./gradlew build` (Gradle runs on JDK 25 and downloads it if no
+JDK 25 is installed, see `gradle/gradle-daemon-jvm.properties`); the jar lands in `build/libs/`.
 
 Then, in a world:
 

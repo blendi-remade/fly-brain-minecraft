@@ -7,20 +7,20 @@ import com.fruitfly.client.hud.TelemetryStore;
 import com.fruitfly.entity.FlyEntity;
 import com.fruitfly.entity.WorldSenses;
 import com.fruitfly.net.BrainTelemetryPayload;
-import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.MeshData;
+import com.mojang.blaze3d.pipeline.BlendFunction;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.Tesselator;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
-import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
-import net.minecraft.client.renderer.GameRenderer;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.rendertype.RenderSetup;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 import java.util.Arrays;
@@ -30,9 +30,10 @@ import java.util.Arrays;
  *
  * <p>Once per JVM, ~{@value #SAMPLE} soma positions are sampled (uniform stride over neurons with a known soma) from
  * {@code FruitFlyMod.BRAIN.connectome()}, centred and scaled to {@value #SIZE_BLOCKS} blocks and coloured by
- * superclass. Every frame the cloud is drawn as additive camera-facing billboards in
- * {@code WorldRenderEvents.AFTER_TRANSLUCENT} with camera-relative coordinates (fabric-api.md §12 item 9,
- * fly-model-art.md §4.2). Neurons in the payload's {@code spikeSample()} flash bright yellow; because the sample is
+ * superclass. Every frame the cloud is submitted as additive camera-facing billboards from
+ * {@code LevelRenderEvents.COLLECT_SUBMITS} with camera-relative coordinates (fabric-api.md §12 item 9,
+ * fly-model-art.md §4.2); being blended custom geometry it draws in the translucent-features pass, i.e. before
+ * translucent terrain. Neurons in the payload's {@code spikeSample()} flash bright yellow; because the sample is
  * only ~2 % of the brain, each spiking neuron also lights up the sampled somata in its spatial neighbourhood so the
  * activity shows up as a regional glow. The hologram rotates with the fly's body yaw.</p>
  *
@@ -53,6 +54,14 @@ public final class BrainWorldOverlay {
     /** Monotonic time base for the focus-marker animation (a modulo clock would snap the ring once a minute). */
     private static final long T0 = System.nanoTime();
 
+    /** Additive (SRC_ALPHA, ONE) position-colour quads: depth-tested against the world, no depth write, two-sided. */
+    private static final RenderPipeline GLOW_PIPELINE = RenderPipelines.register(
+            RenderPipeline.builder(RenderPipelines.DEBUG_FILLED_SNIPPET)
+                    .withLocation(FruitFlyMod.id("pipeline/brain_glow"))
+                    .withColorTargetState(new ColorTargetState(BlendFunction.LIGHTNING))
+                    .build());
+    private static final RenderType GLOW = RenderType.create("fruitfly_brain_glow", RenderSetup.builder(GLOW_PIPELINE).createRenderSetup());
+
     private static boolean registered = false;
     private static Cloud cloud;
     private static Connectome cloudSource;
@@ -65,7 +74,7 @@ public final class BrainWorldOverlay {
     public static void register() {
         if (registered) return;
         registered = true;
-        WorldRenderEvents.AFTER_TRANSLUCENT.register(BrainWorldOverlay::render);
+        LevelRenderEvents.COLLECT_SUBMITS.register(BrainWorldOverlay::render);
     }
 
     /** Number of sampled somata (0 until the connectome is ready and the overlay has drawn once). */
@@ -253,7 +262,7 @@ public final class BrainWorldOverlay {
 
     // ------------------------------------------------------------------ render
 
-    private static void render(WorldRenderContext ctx) {
+    private static void render(LevelRenderContext ctx) {
         boolean neuroscope = NeuroscopeHud.isVisible();
         if (!neuroscope && !com.fruitfly.client.hud.BrainViewHud.isVisible()) return;
         FlyEntity fly = com.fruitfly.client.hud.FlyFocus.current();
@@ -287,26 +296,23 @@ public final class BrainWorldOverlay {
             if (p != null) inject(cl, c, p.spikeSample());
         }
 
-        float pt = ctx.tickCounter().getGameTimeDeltaPartialTick(true);
+        float pt = partialTick();
         Vec3 origin = fly.getPosition(pt).add(0, fly.getBbHeight() + HOVER, 0);
-        Vec3 cam = ctx.camera().getPosition();
+        CameraRenderState camera = ctx.levelState().cameraRenderState;
+        Vec3 cam = camera.pos;
         if (origin.distanceToSqr(cam) > MAX_DISTANCE * MAX_DISTANCE) return;
         float yaw = Mth.rotLerp(pt, fly.yBodyRotO, fly.yBodyRot);
         Vec3 fwd = WorldSenses.forward(yaw), rgt = WorldSenses.right(yaw);
         float ox = (float) (origin.x - cam.x), oy = (float) (origin.y - cam.y), oz = (float) (origin.z - cam.z);
         float fx = (float) fwd.x, fz = (float) fwd.z, rx = (float) rgt.x, rz = (float) rgt.z;
+        Vector3f left = cameraLeft(camera), up = cameraUp(camera);
 
-        PoseStack ps = ctx.matrixStack();
-        Matrix4f pose = ps == null ? new Matrix4f() : ps.last().pose();
-        Vector3f left = ctx.camera().getLeftVector(), up = ctx.camera().getUpVector();
+        // the geometry is built when the submit is drawn, later this frame; act/hit only change in the next collect
+        ctx.submitNodeCollector().submitCustomGeometry(ctx.poseStack(), GLOW, (pose, bb) -> drawCloud(cl, pose, bb, left, up, ox, oy, oz, fx, fz, rx, rz));
+    }
 
-        RenderSystem.setShader(GameRenderer::getPositionColorShader);
-        RenderSystem.enableBlend();
-        RenderSystem.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE);
-        RenderSystem.enableDepthTest();
-        RenderSystem.depthMask(false);
-        RenderSystem.disableCull();
-        BufferBuilder bb = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+    private static void drawCloud(Cloud cl, PoseStack.Pose pose, VertexConsumer bb, Vector3f left, Vector3f up,
+                                  float ox, float oy, float oz, float fx, float fz, float rx, float rz) {
         for (int i = 0; i < cl.n; i++) {
             float lx = cl.local[3 * i], ly = cl.local[3 * i + 1], lz = cl.local[3 * i + 2];
             float x = ox + rx * lx + fx * lz;
@@ -328,13 +334,16 @@ public final class BrainWorldOverlay {
             bb.addVertex(pose, x + lxs + uxs, y + lys + uys, z + lzs + uzs).setColor(r, gg, b, alpha);
             bb.addVertex(pose, x - lxs + uxs, y - lys + uys, z - lzs + uzs).setColor(r, gg, b, alpha);
         }
-        MeshData mesh = bb.build();
-        if (mesh != null) com.mojang.blaze3d.vertex.BufferUploader.drawWithShader(mesh);
-        RenderSystem.depthMask(true);
-        RenderSystem.defaultBlendFunc();
-        RenderSystem.disableBlend();
-        RenderSystem.enableCull();
     }
+
+    private static float partialTick() {
+        return Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(true);
+    }
+
+    /** Camera basis vectors, as {@code Camera} derives them from its orientation. */
+    private static Vector3f cameraLeft(CameraRenderState camera) { return camera.orientation.transform(new Vector3f(-1f, 0f, 0f)); }
+
+    private static Vector3f cameraUp(CameraRenderState camera) { return camera.orientation.transform(new Vector3f(0f, 1f, 0f)); }
 
     // ------------------------------------------------------------------ focus marker
 
@@ -342,9 +351,10 @@ public final class BrainWorldOverlay {
      * Identity marker above the focused fly: a slowly rotating ring of glowing points plus a short beam, in the fly's
      * identity colour (the same colour as its name tag and the HUD panels), so it is always clear whose brain is shown.
      */
-    private static void drawFocusMarker(WorldRenderContext ctx, FlyEntity fly) {
-        float pt = ctx.tickCounter().getGameTimeDeltaPartialTick(true);
-        Vec3 cam = ctx.camera().getPosition();
+    private static void drawFocusMarker(LevelRenderContext ctx, FlyEntity fly) {
+        float pt = partialTick();
+        CameraRenderState camera = ctx.levelState().cameraRenderState;
+        Vec3 cam = camera.pos;
         Vec3 base = fly.getPosition(pt).add(0, fly.getBbHeight() + 0.12, 0);
         if (base.distanceToSqr(cam) > 96 * 96) return;
         int rgb = fly.getFlyColor();
@@ -354,38 +364,24 @@ public final class BrainWorldOverlay {
         float scale = Math.max(0.6f, fly.getFlyScale());
         float ringR = 0.26f * scale, ringY = 0.45f * scale;
 
-        PoseStack ps = ctx.matrixStack();
-        Matrix4f pose = ps == null ? new Matrix4f() : ps.last().pose();
-        Vector3f left = ctx.camera().getLeftVector(), up = ctx.camera().getUpVector();
+        Vector3f left = cameraLeft(camera), up = cameraUp(camera);
         float ox = (float) (base.x - cam.x), oy = (float) (base.y - cam.y), oz = (float) (base.z - cam.z);
-
-        RenderSystem.setShader(GameRenderer::getPositionColorShader);
-        RenderSystem.enableBlend();
-        RenderSystem.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE);
-        RenderSystem.enableDepthTest();
-        RenderSystem.depthMask(false);
-        RenderSystem.disableCull();
-        BufferBuilder bb = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
-        int segments = 32;
-        for (int i = 0; i < segments; i++) {
-            double a = t * 1.3 + i * (2 * Math.PI / segments);
-            float px = ox + ringR * (float) Math.cos(a), pz = oz + ringR * (float) Math.sin(a);
-            float wobble = 0.02f * (float) Math.sin(a * 3 + t * 4);
-            billboard(bb, pose, left, up, px, oy + ringY + wobble, pz, 0.028f * scale, r, gg, b, (int) (210 * pulse));
-        }
-        for (int i = 0; i < 10; i++) {
-            float f = i / 9f;
-            billboard(bb, pose, left, up, ox, oy + f * ringY, oz, 0.016f * scale, r, gg, b, (int) (140 * pulse * (1f - 0.5f * f)));
-        }
-        MeshData mesh = bb.build();
-        if (mesh != null) com.mojang.blaze3d.vertex.BufferUploader.drawWithShader(mesh);
-        RenderSystem.depthMask(true);
-        RenderSystem.defaultBlendFunc();
-        RenderSystem.disableBlend();
-        RenderSystem.enableCull();
+        ctx.submitNodeCollector().submitCustomGeometry(ctx.poseStack(), GLOW, (pose, bb) -> {
+            int segments = 32;
+            for (int i = 0; i < segments; i++) {
+                double a = t * 1.3 + i * (2 * Math.PI / segments);
+                float px = ox + ringR * (float) Math.cos(a), pz = oz + ringR * (float) Math.sin(a);
+                float wobble = 0.02f * (float) Math.sin(a * 3 + t * 4);
+                billboard(bb, pose, left, up, px, oy + ringY + wobble, pz, 0.028f * scale, r, gg, b, (int) (210 * pulse));
+            }
+            for (int i = 0; i < 10; i++) {
+                float f = i / 9f;
+                billboard(bb, pose, left, up, ox, oy + f * ringY, oz, 0.016f * scale, r, gg, b, (int) (140 * pulse * (1f - 0.5f * f)));
+            }
+        });
     }
 
-    private static void billboard(BufferBuilder bb, Matrix4f pose, Vector3f left, Vector3f up, float x, float y, float z, float s,
+    private static void billboard(VertexConsumer bb, PoseStack.Pose pose, Vector3f left, Vector3f up, float x, float y, float z, float s,
                                   int r, int g, int b, int a) {
         float lxs = left.x * s, lys = left.y * s, lzs = left.z * s;
         float uxs = up.x * s, uys = up.y * s, uzs = up.z * s;
